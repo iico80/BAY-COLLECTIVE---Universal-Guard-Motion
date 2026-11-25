@@ -1,0 +1,1833 @@
+-- [[ BAY COLLECTIVE v3 - PART 1/9: CORE, THEME, SAVE & CLEANUP ]] --
+local BC = {
+    Conns = {}, Hooks = {}, Alive = true, Ready = false, Version = "3.0",
+    SaveFile = "BayCollective_v3.json", LastPos = {}, Base = {}, Refreshers = {},
+}
+
+do
+    BC.S = {
+        Players = game:GetService("Players"), Run = game:GetService("RunService"),
+        Tween = game:GetService("TweenService"), UIS = game:GetService("UserInputService"),
+        Http = game:GetService("HttpService"), Light = game:GetService("Lighting"),
+    }
+    local S = BC.S
+    BC.LP = S.Players.LocalPlayer
+
+    if getgenv and type(getgenv().BayCollectiveCleanup) == "function" then
+        pcall(getgenv().BayCollectiveCleanup)
+    end
+
+    BC.Palettes = {
+        { Name = "نيون",  A = Color3.fromRGB(0, 229, 255),  B = Color3.fromRGB(138, 92, 255) },
+        { Name = "زمرد",  A = Color3.fromRGB(70, 255, 170), B = Color3.fromRGB(0, 170, 255) },
+        { Name = "ناري",  A = Color3.fromRGB(255, 170, 50), B = Color3.fromRGB(255, 60, 110) },
+        { Name = "وردي",  A = Color3.fromRGB(255, 110, 220), B = Color3.fromRGB(120, 90, 255) },
+    }
+
+    BC.Theme = {
+        Bg = Color3.fromRGB(8, 10, 18), Panel = Color3.fromRGB(14, 17, 29),
+        Item = Color3.fromRGB(20, 24, 40), Stroke = Color3.fromRGB(38, 46, 74),
+        Cyan = Color3.fromRGB(0, 229, 255), Violet = Color3.fromRGB(138, 92, 255),
+        Green = Color3.fromRGB(70, 255, 170), Red = Color3.fromRGB(255, 80, 110),
+        Gold = Color3.fromRGB(255, 200, 70), Text = Color3.fromRGB(232, 238, 255),
+        SubText = Color3.fromRGB(140, 152, 190),
+        Font = Enum.Font.GothamBold, FontMid = Enum.Font.GothamMedium,
+        A1 = Color3.fromRGB(0, 229, 255), A2 = Color3.fromRGB(138, 92, 255),
+    }
+
+    BC.Defaults = {
+        Speed = 24, Jump = 50, FlySpeed = 60, FOV = 70, Grav = 196, Time = 14,
+        UIScale = 1, Theme = 1, PosX = 0.5, PosY = 0.1,
+        SpeedOn = false, JumpOn = false, InfJump = false, Shield = false, Guard = false,
+        Noclip = false, Fly = false, TapTP = false, ESP = false, ESPNames = true,
+        FullBright = false, FOVOn = false, GravOn = false, TimeOn = false,
+        AntiVoid = true, AntiAFK = true, ShowStats = false, SkipIntro = false,
+    }
+    BC.Config = {}
+    for k, v in pairs(BC.Defaults) do BC.Config[k] = v end
+
+    function BC.ApplyJSON(raw)
+        local ok, data = pcall(S.Http.JSONDecode, S.Http, raw)
+        if not ok or type(data) ~= "table" then return false end
+        for k, def in pairs(BC.Defaults) do
+            if type(data[k]) == type(def) then BC.Config[k] = data[k] end
+        end
+        return true
+    end
+
+    function BC.Load()
+        local raw
+        if isfile and readfile then
+            pcall(function() if isfile(BC.SaveFile) then raw = readfile(BC.SaveFile) end end)
+        end
+        if not raw and getgenv then raw = getgenv().BC_SAVED_JSON end
+        if raw then BC.LoadedFromSave = BC.ApplyJSON(raw) end
+    end
+
+    local function writeNow()
+        local ok, json = pcall(S.Http.JSONEncode, S.Http, BC.Config)
+        if not ok then return end
+        if getgenv then getgenv().BC_SAVED_JSON = json end
+        if writefile then pcall(writefile, BC.SaveFile, json) end
+    end
+    BC.Flush = writeNow
+
+    local queued = false
+    function BC.Save()
+        if queued then return end
+        queued = true
+        task.delay(0.5, function()
+            queued = false
+            if BC.Alive then writeNow() end
+        end)
+    end
+
+    function BC.ResetConfig()
+        for k, v in pairs(BC.Defaults) do BC.Config[k] = v end
+        BC.Save()
+    end
+
+    BC.Load()
+    do
+        local pal = BC.Palettes[math.clamp(BC.Config.Theme, 1, #BC.Palettes)]
+        BC.Theme.A1, BC.Theme.A2 = pal.A, pal.B
+    end
+
+    function BC.Track(c) table.insert(BC.Conns, c) return c end
+    function BC.OnCleanup(fn) table.insert(BC.Hooks, fn) end
+    function BC.Safe(fn, ...)
+        local ok, err = pcall(fn, ...)
+        if not ok then warn("[BayCollective] " .. tostring(err)) end
+        return ok
+    end
+    function BC.Tween(obj, t, props, style, dir)
+        local tw = S.Tween:Create(obj, TweenInfo.new(t, style or Enum.EasingStyle.Quart, dir or Enum.EasingDirection.Out), props)
+        tw:Play()
+        return tw
+    end
+    function BC.Clamp(n, lo, hi, fb)
+        n = tonumber(n)
+        if not n or n ~= n then return fb end
+        return math.clamp(n, lo, hi)
+    end
+    function BC.GetChar()
+        local ch = BC.LP.Character
+        if not ch then return end
+        return ch, ch:FindFirstChild("HumanoidRootPart"), ch:FindFirstChildOfClass("Humanoid")
+    end
+
+    -- حاوية الواجهة
+    local function GetUiParent()
+        local ok, h = pcall(function() return gethui and gethui() end)
+        if ok and h then return h end
+        if pcall(function() return game:GetService("CoreGui").Name end) then return game:GetService("CoreGui") end
+        return BC.LP:WaitForChild("PlayerGui")
+    end
+    BC.UiParent = GetUiParent()
+    local old = BC.UiParent:FindFirstChild("BayCollective_V3")
+    if old then old:Destroy() end
+
+    BC.Gui = Instance.new("ScreenGui")
+    BC.Gui.Name = "BayCollective_V3"
+    BC.Gui.ResetOnSpawn = false
+    BC.Gui.IgnoreGuiInset = true
+    BC.Gui.DisplayOrder = 999
+    BC.Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    BC.Gui.Parent = BC.UiParent
+
+    function BC.Cleanup()
+        if not BC.Alive then return end
+        BC.Alive = false
+        for _, fn in ipairs(BC.Hooks) do pcall(fn) end
+        pcall(BC.Flush)
+        for _, c in ipairs(BC.Conns) do pcall(function() c:Disconnect() end) end
+        table.clear(BC.Conns)
+        table.clear(BC.Hooks)
+        pcall(function() BC.Gui:Destroy() end)
+        if getgenv then getgenv().BayCollectiveCleanup = nil end
+    end
+
+    if getgenv then
+        getgenv().BayCollectiveCleanup = BC.Cleanup
+        getgenv().BC = BC
+    end
+end
+-- [[ BAY COLLECTIVE v3 - PART 2/9: UI LIBRARY ]] --
+do
+    local S, T, LP = BC.S, BC.Theme, BC.LP
+    local UIS, RunService = S.UIS, S.Run
+    local C = BC.Config
+    local UI = {}
+    BC.UI = UI
+    BC.State = { Anchor = false, Locked = nil, SafePos = nil, Spectating = nil, Selected = nil, Slots = {} }
+
+    function BC.RefreshAll()
+        for _, fn in ipairs(BC.Refreshers) do pcall(fn) end
+    end
+    function BC.New(class, props, parent)
+        local o = Instance.new(class)
+        for k, v in pairs(props or {}) do o[k] = v end
+        if parent then o.Parent = parent end
+        return o
+    end
+    local New = BC.New
+    function BC.Round(o, r) return New("UICorner", { CornerRadius = UDim.new(0, r or 4) }, o) end
+    function BC.Stroke(o, col, th, tr)
+        return New("UIStroke", {
+            Color = col or T.Stroke, Thickness = th or 1, Transparency = tr or 0,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        }, o)
+    end
+    local Round, Stroke = BC.Round, BC.Stroke
+
+    function BC.IsPointer(i)
+        return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch
+    end
+    function BC.IsMove(i)
+        return i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch
+    end
+
+    UI.Acc = {}
+    function UI.Reg(o, prop) table.insert(UI.Acc, { o, prop }) end
+
+    -- سحب مخصص مع حدود الشاشة
+    function UI.MakeDraggable(handle, target, onTap, onEnd)
+        local dragging, startPt, startPos, moved = false, nil, nil, 0
+        BC.Track(handle.InputBegan:Connect(function(input)
+            if not BC.IsPointer(input) then return end
+            dragging, moved = true, 0
+            startPt, startPos = input.Position, target.AbsolutePosition
+            local c
+            c = input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    c:Disconnect()
+                    if moved < 8 then
+                        if onTap then onTap() end
+                    elseif onEnd then
+                        onEnd()
+                    end
+                end
+            end)
+        end))
+        BC.Track(UIS.InputChanged:Connect(function(input)
+            if not dragging or not BC.IsMove(input) then return end
+            local d = input.Position - startPt
+            moved = math.max(moved, d.Magnitude)
+            local vs, sz = BC.Gui.AbsoluteSize, target.AbsoluteSize
+            target.Position = UDim2.fromOffset(
+                math.clamp(startPos.X + d.X, 0, math.max(0, vs.X - sz.X)),
+                math.clamp(startPos.Y + d.Y, 0, math.max(0, vs.Y - sz.Y)))
+        end))
+    end
+
+    -- ===== النافذة =====
+    local vs = BC.Gui.AbsoluteSize
+    if vs.X < 50 then vs = workspace.CurrentCamera.ViewportSize end
+    local W, H = math.min(372, vs.X - 16), math.min(340, vs.Y - 24)
+
+    local Main = New("Frame", {
+        Name = "Main", Size = UDim2.fromOffset(W, H),
+        Position = UDim2.fromOffset(
+            math.clamp(C.PosX * vs.X, 0, math.max(0, vs.X - W)),
+            math.clamp(C.PosY * vs.Y, 0, math.max(0, vs.Y - H))),
+        BackgroundColor3 = T.Bg, BackgroundTransparency = 0.05, BorderSizePixel = 0,
+        ClipsDescendants = true, Active = true, Visible = false,
+    }, BC.Gui)
+    Round(Main, 6)
+    local MainStroke = Stroke(Main, Color3.new(1, 1, 1), 1.8)
+    local StrokeGrad = New("UIGradient", {}, MainStroke)
+    local MainScale = New("UIScale", { Scale = C.UIScale }, Main)
+
+    -- جزيئات خلفية
+    local particles = {}
+    for i = 1, 16 do
+        local x, y = math.random(0, W), math.random(0, H)
+        local f = New("Frame", {
+            Size = UDim2.fromOffset(2, 2), Position = UDim2.fromOffset(x, y),
+            BackgroundColor3 = T.A1, BackgroundTransparency = 0.6, BorderSizePixel = 0, ZIndex = 0,
+        }, Main)
+        particles[i] = { f = f, x = x, y = y, s = math.random(8, 26) }
+    end
+
+    -- الهيدر
+    local Header = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = T.Panel, BorderSizePixel = 0 }, Main)
+    local Dot = New("Frame", {
+        Size = UDim2.fromOffset(8, 8), Position = UDim2.new(0, 12, 0.5, -4),
+        BackgroundColor3 = T.Green, BorderSizePixel = 0,
+    }, Header)
+    Round(Dot, 4)
+    New("TextLabel", {
+        Size = UDim2.new(1, -120, 0, 18), Position = UDim2.fromOffset(28, 3), BackgroundTransparency = 1,
+        Text = "BAY COLLECTIVE", Font = T.Font, TextSize = 12, TextColor3 = T.Text,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, Header)
+    New("TextLabel", {
+        Size = UDim2.new(1, -120, 0, 12), Position = UDim2.fromOffset(28, 20), BackgroundTransparency = 1,
+        Text = "SYSTEM ONLINE  //  V" .. BC.Version, Font = T.FontMid, TextSize = 8, TextColor3 = T.SubText,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, Header)
+    local MinBtn = New("TextButton", {
+        Size = UDim2.fromOffset(30, 22), Position = UDim2.new(1, -38, 0.5, -11), BackgroundColor3 = T.Item,
+        Text = "-", Font = T.Font, TextSize = 16, TextColor3 = T.Text, AutoButtonColor = false, BorderSizePixel = 0,
+    }, Header)
+    Round(MinBtn, 4)
+    local HLine = New("Frame", {
+        Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = T.A1, BackgroundTransparency = 0.5, BorderSizePixel = 0,
+    }, Header)
+    UI.Reg(HLine, "BackgroundColor3")
+    UI.MakeDraggable(Header, Main, nil, function()
+        local p, v = Main.AbsolutePosition, BC.Gui.AbsoluteSize
+        C.PosX, C.PosY = p.X / math.max(1, v.X), p.Y / math.max(1, v.Y)
+        BC.Save()
+    end)
+
+    -- الشريط الجانبي والمحتوى
+    local Sidebar = New("ScrollingFrame", {
+        Size = UDim2.new(0, 46, 1, -37), Position = UDim2.fromOffset(0, 37), BackgroundColor3 = T.Panel,
+        BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y,
+    }, Main)
+    New("UIListLayout", { Padding = UDim.new(0, 4), HorizontalAlignment = Enum.HorizontalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder }, Sidebar)
+    New("UIPadding", { PaddingTop = UDim.new(0, 6) }, Sidebar)
+    local Content = New("Frame", {
+        Size = UDim2.new(1, -58, 1, -45), Position = UDim2.fromOffset(54, 41),
+        BackgroundTransparency = 1, ClipsDescendants = true,
+    }, Main)
+
+    local Scan = New("Frame", {
+        Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = T.A1, BackgroundTransparency = 0.92,
+        BorderSizePixel = 0, ZIndex = 20,
+    }, Main)
+    UI.Reg(Scan, "BackgroundColor3")
+
+    -- ===== التبويبات =====
+    UI.Pages, UI.TabBtns, UI.Active = {}, {}, nil
+    function UI.Select(id)
+        UI.Active = id
+        for pid, page in pairs(UI.Pages) do
+            local on = (pid == id)
+            page.Visible = on
+            local tb = UI.TabBtns[pid]
+            tb.Bar.Visible = on
+            BC.Tween(tb.Btn, 0.2, { TextColor3 = on and T.A1 or T.SubText, BackgroundTransparency = on and 0 or 1 })
+        end
+    end
+    function UI.AddTab(id, glyph)
+        local b = New("TextButton", {
+            Size = UDim2.fromOffset(38, 38), BackgroundColor3 = T.Item, BackgroundTransparency = 1,
+            Text = glyph, Font = T.Font, TextSize = 9, TextColor3 = T.SubText,
+            AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = #Sidebar:GetChildren(),
+        }, Sidebar)
+        Round(b, 4)
+        local bar = New("Frame", {
+            Size = UDim2.new(0, 3, 0.6, 0), Position = UDim2.new(0, 0, 0.2, 0),
+            BackgroundColor3 = T.A1, BorderSizePixel = 0, Visible = false,
+        }, b)
+        UI.Reg(bar, "BackgroundColor3")
+        local page = New("ScrollingFrame", {
+            Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+            ScrollBarThickness = 2, ScrollBarImageColor3 = T.A1, CanvasSize = UDim2.new(),
+            AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y, Visible = false,
+        }, Content)
+        New("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, page)
+        New("UIPadding", { PaddingBottom = UDim.new(0, 10), PaddingRight = UDim.new(0, 4) }, page)
+        UI.Pages[id] = page
+        UI.TabBtns[id] = { Btn = b, Bar = bar }
+        BC.Track(b.MouseButton1Click:Connect(function() UI.Select(id) end))
+        if not UI.Active then UI.Select(id) end
+        return page
+    end
+
+    -- ===== فتح وتسكير =====
+    UI.IsOpen = false
+    function UI.ApplyScale() MainScale.Scale = (UI.IsOpen and 1 or 0.9) * C.UIScale end
+    function UI.Open(open)
+        UI.IsOpen = open
+        if open then
+            Main.Visible = true
+            MainScale.Scale = 0.9 * C.UIScale
+            BC.Tween(MainScale, 0.28, { Scale = C.UIScale }, Enum.EasingStyle.Back)
+        else
+            local tw = BC.Tween(MainScale, 0.16, { Scale = 0.9 * C.UIScale }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+            tw.Completed:Once(function() if not UI.IsOpen then Main.Visible = false end end)
+        end
+    end
+    BC.Track(MinBtn.MouseButton1Click:Connect(function() UI.Open(false) end))
+
+    -- الزر العايم
+    local Float = New("TextButton", {
+        Name = "Float", Size = UDim2.fromOffset(46, 46), Position = UDim2.fromOffset(12, vs.Y * 0.4),
+        BackgroundColor3 = T.Panel, Text = "BC", Font = T.Font, TextSize = 13, TextColor3 = T.A1,
+        AutoButtonColor = false, BorderSizePixel = 0, Visible = false,
+    }, BC.Gui)
+    Round(Float, 10)
+    UI.Reg(Float, "TextColor3")
+    local FloatStroke = Stroke(Float, Color3.new(1, 1, 1), 1.8)
+    local FloatGrad = New("UIGradient", {}, FloatStroke)
+    UI.MakeDraggable(Float, Float, function() UI.Open(not UI.IsOpen) end)
+    UI.Float, UI.Main = Float, Main
+
+    -- ===== الثيم =====
+    function UI.ApplyTheme()
+        local pal = BC.Palettes[math.clamp(C.Theme, 1, #BC.Palettes)]
+        T.A1, T.A2 = pal.A, pal.B
+        local seq = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, pal.A), ColorSequenceKeypoint.new(0.5, pal.B), ColorSequenceKeypoint.new(1, pal.A),
+        })
+        StrokeGrad.Color, FloatGrad.Color = seq, seq
+        for _, p in ipairs(particles) do p.f.BackgroundColor3 = pal.A end
+        for _, r in ipairs(UI.Acc) do
+            if r[1] and r[1].Parent then r[1][r[2]] = pal.A end
+        end
+        UI.Select(UI.Active)
+    end
+
+    -- أنيميشن موحد
+    local t0 = os.clock()
+    BC.Track(RunService.RenderStepped:Connect(function(dt)
+        local t = os.clock() - t0
+        local rot = (t * 70) % 360
+        StrokeGrad.Rotation, FloatGrad.Rotation = rot, rot
+        Dot.BackgroundTransparency = 0.3 + 0.3 * math.sin(t * 4)
+        if Main.Visible then
+            Scan.Position = UDim2.new(0, 0, 0, (t * 60) % H)
+            for _, p in ipairs(particles) do
+                p.y -= p.s * dt
+                if p.y < -4 then p.y, p.x = H + 4, math.random(0, W) end
+                p.f.Position = UDim2.fromOffset(p.x, p.y)
+            end
+        end
+    end))
+
+    -- ===== الإشعارات =====
+    local Host = New("Frame", {
+        Size = UDim2.fromOffset(270, 200), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 8),
+        BackgroundTransparency = 1, ZIndex = 200,
+    }, BC.Gui)
+    New("UIListLayout", { Padding = UDim.new(0, 4), HorizontalAlignment = Enum.HorizontalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder }, Host)
+    local live, toastN = {}, 0
+    function BC.Notify(title, msg, col)
+        if not BC.Alive then return end
+        col = col or T.A1
+        toastN += 1
+        local g = New("CanvasGroup", {
+            Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = T.Panel, BorderSizePixel = 0,
+            GroupTransparency = 1, LayoutOrder = toastN,
+        }, Host)
+        Round(g, 5)
+        Stroke(g, col, 1, 0.4)
+        New("Frame", { Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = col, BorderSizePixel = 0 }, g)
+        New("TextLabel", {
+            Size = UDim2.new(1, -18, 0, 14), Position = UDim2.fromOffset(10, 4), BackgroundTransparency = 1,
+            Text = title, Font = T.Font, TextSize = 10, TextColor3 = col, TextXAlignment = Enum.TextXAlignment.Right,
+        }, g)
+        New("TextLabel", {
+            Size = UDim2.new(1, -18, 0, 16), Position = UDim2.fromOffset(10, 19), BackgroundTransparency = 1,
+            Text = msg, Font = T.FontMid, TextSize = 11, TextColor3 = T.Text, TextXAlignment = Enum.TextXAlignment.Right,
+        }, g)
+        BC.Tween(g, 0.25, { GroupTransparency = 0 })
+        table.insert(live, g)
+        if #live > 3 then
+            local o = table.remove(live, 1)
+            if o.Parent then o:Destroy() end
+        end
+        task.delay(2.6, function()
+            if g.Parent then
+                local tw = BC.Tween(g, 0.3, { GroupTransparency = 1 })
+                tw.Completed:Once(function()
+                    local i = table.find(live, g)
+                    if i then table.remove(live, i) end
+                    g:Destroy()
+                end)
+            end
+        end)
+    end
+
+    UI.ApplyTheme()
+end
+-- [[ BAY COLLECTIVE v3 - PART 3/9: WIDGETS ]] --
+do
+    local S, UI, T, C = BC.S, BC.UI, BC.Theme, BC.Config
+    local UIS = S.UIS
+    local New, Round, Stroke = BC.New, BC.Round, BC.Stroke
+
+    function UI.Section(page, text)
+        local f = New("Frame", { Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1 }, page)
+        local ln = New("Frame", {
+            Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 0.5, 0),
+            BackgroundColor3 = T.A1, BackgroundTransparency = 0.7, BorderSizePixel = 0,
+        }, f)
+        local lb = New("TextLabel", {
+            Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X, AnchorPoint = Vector2.new(1, 0),
+            Position = UDim2.new(1, 0, 0, 0), BackgroundColor3 = T.Bg, BorderSizePixel = 0,
+            Text = "  " .. text .. "  ", Font = T.Font, TextSize = 10, TextColor3 = T.A1,
+        }, f)
+        UI.Reg(ln, "BackgroundColor3")
+        UI.Reg(lb, "TextColor3")
+        return f
+    end
+
+    function UI.Label(page, text)
+        return New("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+            Text = text, Font = T.FontMid, TextSize = 11, TextColor3 = T.SubText, TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Right, TextYAlignment = Enum.TextYAlignment.Top, LineHeight = 1.15,
+        }, page)
+    end
+
+    function UI.Toggle(page, text, get, set, accent)
+        accent = accent or T.Cyan
+        local row = New("TextButton", {
+            Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = T.Item, Text = "", AutoButtonColor = false, BorderSizePixel = 0,
+        }, page)
+        Round(row, 4)
+        local st = Stroke(row)
+        New("TextLabel", {
+            Size = UDim2.new(1, -64, 1, 0), Position = UDim2.fromOffset(56, 0), BackgroundTransparency = 1,
+            Text = text, Font = T.FontMid, TextSize = 11, TextColor3 = T.Text,
+            TextXAlignment = Enum.TextXAlignment.Right, TextWrapped = true,
+        }, row)
+        local track = New("Frame", {
+            Size = UDim2.fromOffset(36, 18), Position = UDim2.new(0, 10, 0.5, -9), BackgroundColor3 = T.Bg, BorderSizePixel = 0,
+        }, row)
+        Round(track, 9)
+        local knob = New("Frame", {
+            Size = UDim2.fromOffset(12, 12), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = T.SubText, BorderSizePixel = 0,
+        }, track)
+        Round(knob, 6)
+        local obj = {}
+        function obj.Refresh()
+            local on = get() and true or false
+            BC.Tween(track, 0.2, { BackgroundColor3 = on and accent or T.Bg })
+            BC.Tween(knob, 0.2, {
+                Position = on and UDim2.fromOffset(21, 3) or UDim2.fromOffset(3, 3),
+                BackgroundColor3 = on and Color3.new(1, 1, 1) or T.SubText,
+            })
+            BC.Tween(st, 0.2, { Color = on and accent or T.Stroke })
+        end
+        BC.Track(row.MouseButton1Click:Connect(function()
+            BC.Safe(set, not get())
+            obj.Refresh()
+        end))
+        obj.Refresh()
+        table.insert(BC.Refreshers, obj.Refresh)
+        return obj
+    end
+
+    function UI.CfgToggle(page, text, key, accent, cb)
+        return UI.Toggle(page, text, function() return C[key] end, function(v)
+            C[key] = v
+            BC.Save()
+            if cb then cb(v) end
+        end, accent)
+    end
+
+    function UI.Slider(page, text, key, min, max, step, cb, accent)
+        accent = accent or T.Violet
+        step = step or 1
+        local row = New("Frame", { Size = UDim2.new(1, 0, 0, 64), BackgroundColor3 = T.Item, BorderSizePixel = 0 }, page)
+        Round(row, 4)
+        Stroke(row)
+        New("TextLabel", {
+            Size = UDim2.new(1, -120, 0, 22), Position = UDim2.fromOffset(112, 6), BackgroundTransparency = 1,
+            Text = text, Font = T.FontMid, TextSize = 11, TextColor3 = T.Text, TextXAlignment = Enum.TextXAlignment.Right,
+        }, row)
+        local function mini(txt, x)
+            local b = New("TextButton", {
+                Size = UDim2.fromOffset(24, 22), Position = UDim2.fromOffset(x, 6), BackgroundColor3 = T.Panel,
+                Text = txt, Font = T.Font, TextSize = 14, TextColor3 = accent, AutoButtonColor = false, BorderSizePixel = 0,
+            }, row)
+            Round(b, 4)
+            return b
+        end
+        local minus = mini("-", 8)
+        local box = New("TextBox", {
+            Size = UDim2.fromOffset(44, 22), Position = UDim2.fromOffset(36, 6), BackgroundColor3 = T.Panel,
+            Text = "", Font = T.Font, TextSize = 11, TextColor3 = T.Text, ClearTextOnFocus = false, BorderSizePixel = 0,
+        }, row)
+        Round(box, 4)
+        Stroke(box, accent, 1, 0.5)
+        local plus = mini("+", 84)
+        local hit = New("Frame", { Size = UDim2.new(1, -16, 0, 22), Position = UDim2.fromOffset(8, 36), BackgroundTransparency = 1 }, row)
+        local track = New("Frame", {
+            Size = UDim2.new(1, 0, 0, 6), Position = UDim2.new(0, 0, 0.5, -3), BackgroundColor3 = T.Bg, BorderSizePixel = 0,
+        }, hit)
+        Round(track, 3)
+        local fill = New("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = accent, BorderSizePixel = 0 }, track)
+        Round(fill, 3)
+        local knob = New("Frame", { Size = UDim2.fromOffset(12, 12), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, track)
+        Round(knob, 6)
+
+        local obj = {}
+        local function paint()
+            local v = C[key]
+            local a = math.clamp((v - min) / (max - min), 0, 1)
+            fill.Size = UDim2.new(a, 0, 1, 0)
+            knob.Position = UDim2.new(a, -6, 0.5, -6)
+            if not box:IsFocused() then box.Text = ("%g"):format(v) end
+        end
+        local function set(v)
+            v = BC.Clamp(v, min, max, C[key])
+            v = math.clamp(math.floor(v / step + 0.5) * step, min, max)
+            C[key] = v
+            BC.Save()
+            paint()
+            if cb then BC.Safe(cb, v) end
+        end
+        obj.Set, obj.Refresh = set, paint
+
+        local function fromX(x)
+            local a, w = track.AbsolutePosition.X, math.max(1, track.AbsoluteSize.X)
+            return min + (max - min) * math.clamp((x - a) / w, 0, 1)
+        end
+        local dragging = false
+        BC.Track(hit.InputBegan:Connect(function(input)
+            if not BC.IsPointer(input) then return end
+            dragging = true
+            page.ScrollingEnabled = false
+            set(fromX(input.Position.X))
+            local c
+            c = input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    page.ScrollingEnabled = true
+                    c:Disconnect()
+                end
+            end)
+        end))
+        BC.Track(UIS.InputChanged:Connect(function(input)
+            if dragging and BC.IsMove(input) then set(fromX(input.Position.X)) end
+        end))
+        BC.Track(minus.MouseButton1Click:Connect(function() set(C[key] - step) end))
+        BC.Track(plus.MouseButton1Click:Connect(function() set(C[key] + step) end))
+        BC.Track(box.FocusLost:Connect(function() set(box.Text) end))
+        paint()
+        table.insert(BC.Refreshers, paint)
+        return obj
+    end
+
+    function UI.Button(page, text, cb, accent)
+        return UI.ButtonRow(page, { { text, cb, accent } })
+    end
+
+    function UI.ButtonRow(page, items)
+        local n = #items
+        local row = New("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1 }, page)
+        New("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, row)
+        for i, it in ipairs(items) do
+            local accent = it[3] or T.Text
+            local b = New("TextButton", {
+                Size = UDim2.new(1 / n, -(4 * (n - 1)) / n, 1, 0), BackgroundColor3 = T.Item, Text = it[1],
+                Font = T.Font, TextSize = 10, TextColor3 = accent, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i,
+            }, row)
+            Round(b, 4)
+            Stroke(b, accent, 1, 0.65)
+            BC.Track(b.MouseButton1Click:Connect(function()
+                b.BackgroundColor3 = accent:Lerp(T.Item, 0.6)
+                BC.Tween(b, 0.3, { BackgroundColor3 = T.Item })
+                if it[2] then BC.Safe(it[2]) end
+            end))
+        end
+        return row
+    end
+
+    function UI.Input(page, placeholder, onSubmit, onChange)
+        local box = New("TextBox", {
+            Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = T.Item, Text = "", PlaceholderText = placeholder,
+            PlaceholderColor3 = T.SubText, Font = T.FontMid, TextSize = 11, TextColor3 = T.Text,
+            ClearTextOnFocus = false, BorderSizePixel = 0, TextXAlignment = Enum.TextXAlignment.Right,
+        }, page)
+        Round(box, 4)
+        Stroke(box, T.Stroke)
+        New("UIPadding", { PaddingRight = UDim.new(0, 10), PaddingLeft = UDim.new(0, 10) }, box)
+        if onChange then
+            BC.Track(box:GetPropertyChangedSignal("Text"):Connect(function() onChange(box.Text) end))
+        end
+        if onSubmit then
+            BC.Track(box.FocusLost:Connect(function(enter) onSubmit(box.Text, enter) end))
+        end
+        return box
+    end
+end
+-- [[ BAY COLLECTIVE v3 - PART 4/9: CINEMATIC INTRO (~25s) ]] --
+do
+    local S, T = BC.S, BC.Theme
+    local New, Round = BC.New, BC.Round
+    local RunService = S.Run
+
+    function BC.PlayIntro(onDone)
+        local skipped, finished = false, false
+        local TEXT = "بدنا نروح لشي كبيررر"
+        local vs = BC.Gui.AbsoluteSize
+        if vs.X < 50 then vs = workspace.CurrentCamera.ViewportSize end
+
+        local ov = New("TextButton", {
+            Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Bg, BorderSizePixel = 0,
+            Text = "", AutoButtonColor = false, ZIndex = 100,
+        }, BC.Gui)
+        local glow = New("Frame", {
+            Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1),
+            BackgroundTransparency = 0.88, BorderSizePixel = 0, ZIndex = 100,
+        }, ov)
+        local gg = New("UIGradient", { Color = ColorSequence.new(T.A1, T.A2), Rotation = 90 }, glow)
+
+        -- نجوم / سرعة الضوء
+        local stars = {}
+        for i = 1, 48 do
+            local f = New("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2, 2), BackgroundColor3 = Color3.new(1, 1, 1),
+                BackgroundTransparency = 0.5, BorderSizePixel = 0, ZIndex = 101,
+            }, ov)
+            stars[i] = { f = f, a = math.random() * math.pi * 2, r = math.random(5, 300), sp = math.random(30, 90) / 100 }
+        end
+        local warp, shake, act4Start, t = 0.15, 0, nil, 0
+        local a4 -- يتعرف تحت
+        local starConn
+        starConn = BC.Track(RunService.RenderStepped:Connect(function(dt)
+            t += dt
+            local sz = ov.AbsoluteSize
+            local cx, cy, lim = sz.X / 2, sz.Y / 2, math.max(sz.X, sz.Y) * 0.75
+            if act4Start then
+                local p = math.clamp((os.clock() - act4Start) / 6.2, 0, 1)
+                warp, shake = 0.15 + p * p * 7, p * p * p * 5
+            end
+            gg.Rotation = 90 + math.sin(t) * 40
+            for _, s in ipairs(stars) do
+                s.r += (40 + s.r * 1.2) * s.sp * warp * dt
+                if s.r > lim then s.r, s.a = math.random(3, 30), math.random() * math.pi * 2 end
+                local d = 1 + s.r / 120 * math.min(warp, 6)
+                s.f.Size = UDim2.fromOffset(d, d)
+                s.f.Position = UDim2.fromOffset(cx + math.cos(s.a) * s.r, cy + math.sin(s.a) * s.r)
+            end
+            if a4 and shake > 0.05 then
+                a4.Position = UDim2.fromOffset(math.random(-shake * 10, shake * 10) / 10, math.random(-shake * 10, shake * 10) / 10)
+            end
+        end))
+
+        local function newAct()
+            return New("CanvasGroup", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, GroupTransparency = 1, ZIndex = 102 }, ov)
+        end
+        local function show(a, d) BC.Tween(a, d or 0.4, { GroupTransparency = 0 }) end
+        local function hide(a, d) BC.Tween(a, d or 0.4, { GroupTransparency = 1 }) end
+        local function Lbl(parent, y, text, size, font, col)
+            return New("TextLabel", {
+                AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, y),
+                Size = UDim2.new(0.92, 0, 0, size + 12), BackgroundTransparency = 1, Text = text,
+                Font = font, TextSize = size, TextColor3 = col,
+            }, parent)
+        end
+        local function W(sec)
+            local e = os.clock() + sec
+            while os.clock() < e do
+                if skipped or not BC.Alive then return false end
+                task.wait()
+            end
+            return not skipped
+        end
+        local function typeText(l, dur)
+            local n = utf8.len(l.Text) or #l.Text
+            local t0 = os.clock()
+            l.MaxVisibleGraphemes = 0
+            while true do
+                local p = (os.clock() - t0) / dur
+                l.MaxVisibleGraphemes = math.floor(n * math.min(p, 1))
+                if p >= 1 or skipped or not BC.Alive then break end
+                task.wait()
+            end
+            l.MaxVisibleGraphemes = -1
+        end
+        local CH = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$%&@"
+        local function scramble(l, final, dur)
+            local n, t0 = #final, os.clock()
+            while os.clock() - t0 < dur and not skipped and BC.Alive do
+                local p = (os.clock() - t0) / dur
+                local out = {}
+                for i = 1, n do
+                    local c = final:sub(i, i)
+                    if c == " " or i / n < p then out[i] = c else
+                        local r = math.random(#CH)
+                        out[i] = CH:sub(r, r)
+                    end
+                end
+                l.Text = table.concat(out)
+                task.wait(0.03)
+            end
+            l.Text = final
+        end
+
+        -- الفصل 1: الإقلاع
+        local a1 = newAct()
+        local box = New("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+            Size = UDim2.new(0.88, 0, 0, 180), BackgroundTransparency = 1,
+        }, a1)
+        New("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, box)
+        local bootLines = {
+            "> BAY COLLECTIVE KERNEL v3.0", "> mounting virtual filesystem ........ OK",
+            "> loading shield module .............. OK", "> loading movement engine ............ OK",
+            "> syncing player database ............ OK", "> restoring saved configuration ...... OK",
+            "> establishing secure channel ........ OK", "> all systems nominal. starting UI...",
+        }
+        local bl = {}
+        for i, s in ipairs(bootLines) do
+            bl[i] = New("TextLabel", {
+                Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Text = s, Font = Enum.Font.Code, TextSize = 11,
+                TextColor3 = (i == 1 or i == #bootLines) and T.A1 or T.Green, TextXAlignment = Enum.TextXAlignment.Left,
+                MaxVisibleGraphemes = 0, LayoutOrder = i,
+            }, box)
+        end
+
+        -- الفصل 2: الشعار
+        local a2 = newAct()
+        local title = Lbl(a2, 0.42, "", 32, Enum.Font.GothamBlack, T.Text)
+        local tline = New("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.52), Size = UDim2.new(0, 0, 0, 2),
+            BackgroundColor3 = T.A1, BorderSizePixel = 0,
+        }, a2)
+        local sub2 = Lbl(a2, 0.6, "نظام الحماية والتحكم الشامل", 14, T.Font, T.A1)
+        sub2.TextTransparency = 1
+        local tag = Lbl(a2, 0.68, "SECURE  •  FAST  •  SMOOTH", 10, T.FontMid, T.SubText)
+        tag.TextTransparency = 1
+
+        -- الفصل 3: تحميل الوحدات
+        local a3 = newAct()
+        Lbl(a3, 0.2, "LOADING MODULES", 12, T.Font, T.A1)
+        local oTrack = New("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.29), Size = UDim2.new(0.7, 0, 0, 5),
+            BackgroundColor3 = T.Item, BorderSizePixel = 0,
+        }, a3)
+        Round(oTrack, 3)
+        local oFill = New("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = T.A1, BorderSizePixel = 0 }, oTrack)
+        Round(oFill, 3)
+        local pct = Lbl(a3, 0.35, "0%", 10, T.Font, T.SubText)
+        local mods = {
+            "وحدة الدرع والثبات", "محرك الحركة والطيران", "قاعدة بيانات اللاعبين", "نظام المشاهدة والانتقال",
+            "عالم الرؤية و ESP", "حفظ الإعدادات الذكي", "الواجهة المستقبلية",
+        }
+        local rows = {}
+        for i, m in ipairs(mods) do
+            local r = New("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0.42, (i - 1) * 24),
+                Size = UDim2.new(0.8, 0, 0, 22), BackgroundTransparency = 1,
+            }, a3)
+            local ok = New("TextLabel", {
+                Size = UDim2.new(0.12, 0, 1, 0), BackgroundTransparency = 1, Text = "..", Font = T.Font, TextSize = 10,
+                TextColor3 = T.SubText, TextXAlignment = Enum.TextXAlignment.Left,
+            }, r)
+            local tr = New("Frame", {
+                Position = UDim2.new(0.14, 0, 0.5, -2), Size = UDim2.new(0.3, 0, 0, 4), BackgroundColor3 = T.Item, BorderSizePixel = 0,
+            }, r)
+            Round(tr, 2)
+            local fl = New("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = T.A2, BorderSizePixel = 0 }, tr)
+            Round(fl, 2)
+            New("TextLabel", {
+                Position = UDim2.new(0.46, 0, 0, 0), Size = UDim2.new(0.54, 0, 1, 0), BackgroundTransparency = 1, Text = m,
+                Font = T.FontMid, TextSize = 11, TextColor3 = T.Text, TextXAlignment = Enum.TextXAlignment.Right,
+            }, r)
+            rows[i] = { ok = ok, fill = fl }
+        end
+
+        -- الفصل 4: الانطلاق
+        a4 = newAct()
+        local estW = (utf8.len(TEXT) or #TEXT) * 26 * 0.55
+        local maxScale = math.clamp((vs.X * 0.9) / estW, 1.2, 3)
+        local big = New("TextLabel", {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.42), Size = UDim2.fromOffset(estW, 50),
+            BackgroundTransparency = 1, Text = TEXT, Font = Enum.Font.GothamBlack, TextSize = 26, TextColor3 = T.Text,
+            TextWrapped = false, MaxVisibleGraphemes = 0,
+        }, a4)
+        local bigScale = New("UIScale", { Scale = 0.7 }, big)
+        local sub4 = Lbl(a4, 0.66, "", 12, T.FontMid, T.SubText)
+        local cnt = Lbl(a4, 0.8, "", 34, Enum.Font.GothamBlack, T.A1)
+        local cntScale = New("UIScale", { Scale = 1 }, cnt)
+
+        Lbl(ov, 0.95, "ضغطتين عالشاشة للتخطي", 9, T.FontMid, T.SubText).ZIndex = 110
+
+        local lastTap = 0
+        BC.Track(ov.MouseButton1Click:Connect(function()
+            if os.clock() - lastTap < 0.45 then skipped = true end
+            lastTap = os.clock()
+        end))
+
+        local function run()
+            show(a1, 0.4)
+            for i = 1, #bl do
+                if skipped then return end
+                typeText(bl[i], 0.33)
+                if not W(0.14) then return end
+            end
+            if not W(0.5) then return end
+
+            hide(a1, 0.35)
+            if not W(0.4) then return end
+            show(a2, 0.3)
+            BC.Tween(tline, 1.2, { Size = UDim2.new(0.6, 0, 0, 2) })
+            scramble(title, "BAY COLLECTIVE", 2.2)
+            BC.Tween(sub2, 0.6, { TextTransparency = 0 })
+            BC.Tween(tag, 0.6, { TextTransparency = 0.3 })
+            if not W(2.0) then return end
+
+            hide(a2, 0.35)
+            if not W(0.4) then return end
+            show(a3, 0.3)
+            for i, r in ipairs(rows) do
+                if skipped then return end
+                BC.Tween(r.fill, 0.75, { Size = UDim2.fromScale(1, 1) }, Enum.EasingStyle.Quad)
+                BC.Tween(oFill, 0.75, { Size = UDim2.fromScale(i / #rows, 1) }, Enum.EasingStyle.Quad)
+                if not W(0.8) then return end
+                r.ok.Text, r.ok.TextColor3 = "OK", T.Green
+                pct.Text = ("%d%%"):format(math.floor(i / #rows * 100))
+            end
+            if not W(0.5) then return end
+
+            hide(a3, 0.35)
+            if not W(0.4) then return end
+            show(a4, 0.3)
+            act4Start = os.clock()
+            BC.Tween(bigScale, 5.6, { Scale = maxScale }, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+            typeText(big, 1.5)
+            if not W(0.4) then return end
+            sub4.Text = "عم نجمّع الطاقة..."
+            if not W(1.0) then return end
+            sub4.Text = "عم نثبّت الاتصال..."
+            if not W(1.0) then return end
+            for _, n in ipairs({ "3", "2", "1" }) do
+                cnt.Text = n
+                cntScale.Scale = 1.8
+                BC.Tween(cntScale, 0.5, { Scale = 1 }, Enum.EasingStyle.Back)
+                if not W(0.8) then return end
+            end
+        end
+
+        local function finish()
+            if finished then return end
+            finished = true
+            local flash = New("Frame", {
+                Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1),
+                BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 130,
+            }, ov)
+            if not skipped then
+                BC.Tween(flash, 0.35, { BackgroundTransparency = 0 })
+                task.wait(0.4)
+            end
+            if starConn then pcall(function() starConn:Disconnect() end) end
+            for _, s in ipairs(stars) do s.f:Destroy() end
+            for _, a in ipairs({ a1, a2, a3, a4 }) do a.GroupTransparency = 1 end
+            glow.BackgroundTransparency = 1
+            ov.BackgroundTransparency = 1
+            BC.Tween(flash, 0.7, { BackgroundTransparency = 1 })
+            if BC.Alive and onDone then onDone() end
+            task.wait(0.75)
+            if ov.Parent then ov:Destroy() end
+        end
+
+        task.spawn(function()
+            run()
+            finish()
+        end)
+    end
+end
+-- [[ BAY COLLECTIVE v3 - PART 5/9: GUARD & MOVE PAGES ]] --
+do
+    local UI, T, C, State, LP = BC.UI, BC.Theme, BC.Config, BC.State, BC.LP
+
+    function BC.SetAnchor(v)
+        if v then
+            local _, hrp = BC.GetChar()
+            if not hrp then return end
+            State.Locked, State.Anchor = hrp.CFrame, true
+            if not C.Shield then
+                C.Shield = true
+                BC.Save()
+                BC.RefreshAll()
+            end
+        else
+            State.Anchor, State.Locked = false, nil
+        end
+    end
+
+    function BC.RestoreSpeed()
+        local _, _, hum = BC.GetChar()
+        if hum then hum.WalkSpeed = BC.Base.Walk or 16 end
+    end
+    function BC.RestoreJump()
+        local _, _, hum = BC.GetChar()
+        if hum then
+            if hum.UseJumpPower then hum.JumpPower = BC.Base.JumpPower or 50
+            else hum.JumpHeight = BC.Base.JumpHeight or 7.2 end
+        end
+    end
+    function BC.StopFly()
+        local _, hrp = BC.GetChar()
+        if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
+    end
+    function BC.StopNoclip()
+        local _, hrp = BC.GetChar()
+        if hrp then hrp.CanCollide = true end
+    end
+
+    -- ===== الحماية =====
+    local guard = UI.AddTab("guard", "DEF")
+    UI.Section(guard, "الدرع والثبات")
+    UI.CfgToggle(guard, "درع ضد الدفع والفلنق", "Shield", T.Cyan)
+    UI.CfgToggle(guard, "موازنة الحركة ومنع السقوط", "Guard", T.Green)
+    UI.Toggle(guard, "تثبيت الموقع الصارم (Anchor)", function() return State.Anchor end, function(v)
+        BC.SetAnchor(v)
+        BC.Notify("BAY COLLECTIVE", v and "تم تثبيت مكانك." or "انفك التثبيت.", T.Violet)
+    end, T.Violet)
+    UI.Label(guard, "التثبيت بيفعّل الدرع تلقائياً وبينفك لما تموت. التثبيت ما بيتحفظ بالتشغيل الجاي (للأمان).")
+
+    -- ===== الحركة =====
+    local move = UI.AddTab("move", "MOV")
+    UI.Section(move, "السرعة (القيمة من اختيارك)")
+    UI.CfgToggle(move, "تفعيل السرعة المخصصة", "SpeedOn", T.Violet, function(v) if not v then BC.RestoreSpeed() end end)
+    local sp = UI.Slider(move, "قيمة السرعة", "Speed", 1, 300, 1, nil, T.Violet)
+    UI.ButtonRow(move, {
+        { "16", function() sp.Set(16) end }, { "24", function() sp.Set(24) end },
+        { "32", function() sp.Set(32) end }, { "50", function() sp.Set(50) end },
+    })
+
+    UI.Section(move, "القفز")
+    UI.CfgToggle(move, "تفعيل قوة القفز المخصصة", "JumpOn", T.Cyan, function(v) if not v then BC.RestoreJump() end end)
+    UI.Slider(move, "قوة القفز", "Jump", 10, 400, 1, nil, T.Cyan)
+    UI.CfgToggle(move, "قفز مرن إضافي (Infinite Jump)", "InfJump", T.Green)
+
+    UI.Section(move, "الطيران والاختراق")
+    UI.CfgToggle(move, "الطيران (وجّه الكاميرا + القفز للطلوع)", "Fly", T.Gold, function(v) if not v then BC.StopFly() end end)
+    UI.Slider(move, "سرعة الطيران", "FlySpeed", 10, 300, 1, nil, T.Gold)
+    UI.CfgToggle(move, "اختراق الجدران (Noclip)", "Noclip", T.Red, function(v) if not v then BC.StopNoclip() end end)
+end
+-- [[ BAY COLLECTIVE v3 - PART 6/9: PLAYERS, TELEPORT & SPECTATE ]] --
+do
+    local S, UI, T, C, State, LP = BC.S, BC.UI, BC.Theme, BC.Config, BC.State, BC.LP
+    local Players = S.Players
+    local New, Round, Stroke = BC.New, BC.Round, BC.Stroke
+
+    local function parts(plr)
+        local ch = plr.Character
+        return ch, ch and ch:FindFirstChild("HumanoidRootPart"), ch and ch:FindFirstChildOfClass("Humanoid")
+    end
+
+    -- كاش آخر موقع معروف (بيخلينا نشوف اللاعب حتى لو انحذف من الستريم)
+    task.spawn(function()
+        while BC.Alive do
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LP then
+                    local _, hrp = parts(p)
+                    if hrp then BC.LastPos[p] = hrp.Position end
+                end
+            end
+            task.wait(0.5)
+        end
+    end)
+
+    local thumbs = {}
+    local function thumb(userId, kind, size, cb)
+        local key = userId .. kind.Name
+        if thumbs[key] then cb(thumbs[key]) return end
+        task.spawn(function()
+            local ok, img = pcall(Players.GetUserThumbnailAsync, Players, userId, kind, size)
+            if ok and img then
+                thumbs[key] = img
+                if BC.Alive then cb(img) end
+            end
+        end)
+    end
+
+    -- تحميل المنطقة حول لاعب غير محمّل
+    function BC.EnsureLoaded(plr, timeout)
+        local _, hrp = parts(plr)
+        if hrp then return hrp end
+        local pos = BC.LastPos[plr]
+        if pos then task.spawn(function() pcall(function() LP:RequestStreamAroundAsync(pos, 3) end) end) end
+        local t0 = os.clock()
+        while os.clock() - t0 < timeout and BC.Alive do
+            local _, h = parts(plr)
+            if h then return h end
+            task.wait(0.15)
+        end
+    end
+
+    function BC.TeleportTo(plr)
+        if not plr or not plr.Parent then return end
+        local _, me = BC.GetChar()
+        if not me then return end
+        local _, hrp0 = parts(plr)
+        if not hrp0 then BC.Notify("انتقال", "عم نحمّل المنطقة حوالين " .. plr.DisplayName .. "...", T.Gold) end
+        task.spawn(function()
+            local hrp = BC.EnsureLoaded(plr, 6)
+            local _, myhrp = BC.GetChar()
+            if not myhrp then return end
+            if hrp then
+                myhrp.AssemblyLinearVelocity = Vector3.zero
+                myhrp.CFrame = hrp.CFrame * CFrame.new(0, 0, 3)
+                BC.Notify("انتقال", "وصلنا عند " .. plr.DisplayName, T.Green)
+            elseif BC.LastPos[plr] then
+                myhrp.AssemblyLinearVelocity = Vector3.zero
+                myhrp.CFrame = CFrame.new(BC.LastPos[plr] + Vector3.new(0, 5, 0))
+                BC.Notify("انتقال", "رحنا لآخر موقع معروف إله.", T.Gold)
+            else
+                BC.Notify("انتقال", "موقعه مجهول وما انشاف قبل.", T.Red)
+                return
+            end
+            if State.Anchor then State.Locked = myhrp.CFrame end
+        end)
+    end
+
+    -- ===== شريط المشاهدة =====
+    local hud = New("Frame", {
+        Size = UDim2.fromOffset(260, 40), AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -14),
+        BackgroundColor3 = T.Panel, BorderSizePixel = 0, Visible = false, ZIndex = 50,
+    }, BC.Gui)
+    Round(hud, 6)
+    local hudStroke = Stroke(hud, T.A1, 1, 0.2)
+    local hudName = New("TextLabel", {
+        Size = UDim2.new(1, -116, 1, 0), Position = UDim2.fromOffset(10, 0), BackgroundTransparency = 1, Text = "",
+        Font = T.Font, TextSize = 11, TextColor3 = T.Text, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 51,
+    }, hud)
+    local function hbtn(txt, x, col)
+        local b = New("TextButton", {
+            Size = UDim2.fromOffset(30, 28), Position = UDim2.new(1, x, 0.5, -14), BackgroundColor3 = T.Item,
+            Text = txt, Font = T.Font, TextSize = 13, TextColor3 = col, AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 51,
+        }, hud)
+        Round(b, 4)
+        return b
+    end
+    local hPrev, hNext, hStop = hbtn("<", -104, T.A1), hbtn(">", -70, T.A1), hbtn("X", -36, T.Red)
+
+    function BC.StopSpectate(silent)
+        BC.SpecToken = (BC.SpecToken or 0) + 1
+        local was = State.Spectating
+        State.Spectating = nil
+        hud.Visible = false
+        local cam = workspace.CurrentCamera
+        local _, _, hum = BC.GetChar()
+        if cam then
+            cam.CameraType = Enum.CameraType.Custom
+            if hum then cam.CameraSubject = hum end
+        end
+        if was and not silent then BC.Notify("المشاهدة", "رجعت الكاميرا إلك.", T.Green) end
+    end
+
+    function BC.Spectate(plr)
+        if not plr or plr == LP or not plr.Parent then return end
+        BC.StopSpectate(true)
+        State.Spectating = plr
+        BC.SpecToken = (BC.SpecToken or 0) + 1
+        local token = BC.SpecToken
+        hud.Visible = true
+        task.spawn(function()
+            local lastReq = 0
+            while BC.Alive and State.Spectating == plr and BC.SpecToken == token do
+                local cam = workspace.CurrentCamera
+                local _, hrp, hum = parts(plr)
+                local _, me = BC.GetChar()
+                if hrp and hum then
+                    if cam.CameraSubject ~= hum then cam.CameraSubject = hum end
+                    if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
+                    BC.LastPos[plr] = hrp.Position
+                    hudName.Text = plr.DisplayName .. ((me and ("  •  " .. math.floor((hrp.Position - me.Position).Magnitude) .. "م")) or "")
+                    hudName.TextColor3 = T.Text
+                elseif BC.LastPos[plr] then
+                    local pos = BC.LastPos[plr]
+                    cam.CameraType = Enum.CameraType.Scriptable
+                    cam.CFrame = CFrame.lookAt(pos + Vector3.new(0, 10, 18), pos)
+                    hudName.Text = plr.DisplayName .. "  •  عم يتحمّل..."
+                    hudName.TextColor3 = T.Gold
+                    if os.clock() - lastReq > 2.5 then
+                        lastReq = os.clock()
+                        task.spawn(function() pcall(function() LP:RequestStreamAroundAsync(pos, 2) end) end)
+                    end
+                else
+                    hudName.Text = plr.DisplayName .. "  •  موقعه مجهول"
+                    hudName.TextColor3 = T.Red
+                end
+                task.wait(0.1)
+            end
+        end)
+        BC.Notify("المشاهدة", "عم تشوف " .. plr.DisplayName, T.Violet)
+    end
+    BC.Track(hStop.MouseButton1Click:Connect(function() BC.StopSpectate() end))
+    BC.OnCleanup(function() BC.StopSpectate(true) end)
+
+    -- ===== الصفحة =====
+    local page = UI.AddTab("players", "PLR")
+    UI.Section(page, "اللاعبين")
+    local rebuild
+    local search = UI.Input(page, "ابحث بالاسم...", nil, function() if rebuild then rebuild() end end)
+
+    local card = New("Frame", { Size = UDim2.new(1, 0, 0, 92), BackgroundColor3 = T.Item, BorderSizePixel = 0 }, page)
+    Round(card, 4)
+    local cardStroke = Stroke(card, T.A1, 1, 0.4)
+    UI.Reg(cardStroke, "Color")
+    local cImg = New("ImageLabel", {
+        Size = UDim2.fromOffset(72, 72), Position = UDim2.new(1, -80, 0.5, -36), BackgroundColor3 = T.Bg, BorderSizePixel = 0,
+    }, card)
+    Round(cImg, 6)
+    local function cl(y, size, font, col)
+        return New("TextLabel", {
+            Size = UDim2.new(1, -96, 0, 16), Position = UDim2.fromOffset(8, y), BackgroundTransparency = 1, Text = "",
+            Font = font, TextSize = size, TextColor3 = col, TextXAlignment = Enum.TextXAlignment.Right,
+        }, card)
+    end
+    local cName, cUser = cl(10, 13, T.Font, T.Text), cl(30, 10, T.FontMid, T.SubText)
+    local cAge, cState = cl(48, 10, T.FontMid, T.SubText), cl(66, 10, T.FontMid, T.Green)
+
+    local function updateCard()
+        local plr = State.Selected
+        if not plr or not plr.Parent then
+            State.Selected = nil
+            cName.Text, cUser.Text, cAge.Text, cState.Text, cImg.Image = "اختار لاعب من القائمة", "", "", "", ""
+            return
+        end
+        cName.Text = plr.DisplayName
+        cUser.Text = "@" .. plr.Name .. "  •  ID " .. plr.UserId
+        cAge.Text = "عمر الحساب: " .. plr.AccountAge .. " يوم" .. (plr.Team and ("  •  " .. plr.Team.Name) or "")
+        local _, hrp, hum = parts(plr)
+        local _, me = BC.GetChar()
+        if hrp and me then
+            cState.Text = ("محمّل • %d متر%s"):format(math.floor((hrp.Position - me.Position).Magnitude),
+                hum and ("  •  صحة " .. math.floor(hum.Health)) or "")
+            cState.TextColor3 = T.Green
+        elseif BC.LastPos[plr] then
+            cState.Text, cState.TextColor3 = "غير محمّل • آخر موقع معروف", T.Gold
+        else
+            cState.Text, cState.TextColor3 = "غير محمّل • الموقع مجهول", T.Red
+        end
+    end
+
+    local function sel()
+        if not State.Selected then
+            BC.Notify("اللاعبين", "اختار لاعب من القائمة أول.", T.Gold)
+            return nil
+        end
+        return State.Selected
+    end
+    local function others()
+        local t = {}
+        for _, p in ipairs(Players:GetPlayers()) do if p ~= LP then table.insert(t, p) end end
+        table.sort(t, function(a, b) return a.Name:lower() < b.Name:lower() end)
+        return t
+    end
+    function BC.CycleSpectate(dir)
+        local t = others()
+        if #t == 0 then return end
+        local idx = table.find(t, State.Spectating or State.Selected) or 0
+        idx = ((idx - 1 + dir) % #t) + 1
+        State.Selected = t[idx]
+        BC.Spectate(t[idx])
+        updateCard()
+        if rebuild then rebuild() end
+    end
+    BC.Track(hPrev.MouseButton1Click:Connect(function() BC.CycleSpectate(-1) end))
+    BC.Track(hNext.MouseButton1Click:Connect(function() BC.CycleSpectate(1) end))
+
+    UI.ButtonRow(page, {
+        { "انتقال", function() local p = sel() if p then BC.TeleportTo(p) end end, T.Cyan },
+        { "مشاهدة", function() local p = sel() if p then BC.Spectate(p) end end, T.Violet },
+        { "إيقاف", function() BC.StopSpectate() end, T.Red },
+    })
+    UI.ButtonRow(page, {
+        { "السابق", function() BC.CycleSpectate(-1) end, T.A1 },
+        { "التالي", function() BC.CycleSpectate(1) end, T.A1 },
+        { "نسخ الاسم", function()
+            local p = sel()
+            if p and setclipboard then setclipboard(p.Name) BC.Notify("اللاعبين", "اننسخ: " .. p.Name, T.Green)
+            elseif p then BC.Notify("اللاعبين", "الـ executor ما بيدعم النسخ.", T.Red) end
+        end, T.Gold },
+    })
+
+    local holder = New("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, page)
+    New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, holder)
+    local rows = {}
+
+    rebuild = function()
+        for _, r in pairs(rows) do r.btn:Destroy() end
+        rows = {}
+        local q = (search.Text or ""):lower()
+        local list = {}
+        for _, p in ipairs(others()) do
+            if q == "" or p.Name:lower():find(q, 1, true) or p.DisplayName:lower():find(q, 1, true) then
+                table.insert(list, p)
+            end
+        end
+        if #list == 0 then
+            rows.empty = { btn = New("TextLabel", {
+                Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, Text = "ما في لاعبين", Font = T.FontMid,
+                TextSize = 11, TextColor3 = T.SubText,
+            }, holder) }
+            return
+        end
+        for i, p in ipairs(list) do
+            local btn = New("TextButton", {
+                Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = T.Item, Text = "", AutoButtonColor = false,
+                BorderSizePixel = 0, LayoutOrder = i,
+            }, holder)
+            Round(btn, 4)
+            local st = Stroke(btn, State.Selected == p and T.A1 or T.Stroke)
+            local av = New("ImageLabel", {
+                Size = UDim2.fromOffset(34, 34), Position = UDim2.new(1, -40, 0.5, -17), BackgroundColor3 = T.Bg, BorderSizePixel = 0,
+            }, btn)
+            Round(av, 17)
+            thumb(p.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100, function(img) av.Image = img end)
+            New("TextLabel", {
+                Size = UDim2.new(1, -116, 0, 18), Position = UDim2.fromOffset(68, 5), BackgroundTransparency = 1,
+                Text = p.DisplayName, Font = T.Font, TextSize = 11, TextColor3 = T.Text, TextXAlignment = Enum.TextXAlignment.Right,
+            }, btn)
+            New("TextLabel", {
+                Size = UDim2.new(1, -116, 0, 14), Position = UDim2.fromOffset(68, 23), BackgroundTransparency = 1,
+                Text = "@" .. p.Name, Font = T.FontMid, TextSize = 9, TextColor3 = T.SubText, TextXAlignment = Enum.TextXAlignment.Right,
+            }, btn)
+            local dist = New("TextLabel", {
+                Size = UDim2.fromOffset(56, 18), Position = UDim2.fromOffset(8, 13), BackgroundTransparency = 1, Text = "",
+                Font = T.Font, TextSize = 10, TextColor3 = T.SubText, TextXAlignment = Enum.TextXAlignment.Left,
+            }, btn)
+            rows[p] = { btn = btn, st = st, dist = dist }
+            BC.Track(btn.MouseButton1Click:Connect(function()
+                State.Selected = p
+                for pp, r in pairs(rows) do
+                    if r.st then r.st.Color = (pp == p) and T.A1 or T.Stroke end
+                end
+                updateCard()
+                thumb(p.UserId, Enum.ThumbnailType.AvatarBust, Enum.ThumbnailSize.Size150x150, function(img)
+                    if State.Selected == p then cImg.Image = img end
+                end)
+            end))
+        end
+    end
+
+    local pending = false
+    local function queueRebuild()
+        if pending then return end
+        pending = true
+        task.delay(0.25, function() pending = false if BC.Alive then rebuild() end end)
+    end
+    BC.Track(Players.PlayerAdded:Connect(queueRebuild))
+    BC.Track(Players.PlayerRemoving:Connect(function(p)
+        BC.LastPos[p] = nil
+        if State.Selected == p then State.Selected = nil end
+        if State.Spectating == p then
+            BC.StopSpectate(true)
+            BC.Notify("المشاهدة", p.DisplayName .. " طلع من السيرفر.", T.Gold)
+        end
+        queueRebuild()
+        task.delay(0.3, updateCard)
+    end))
+    rebuild()
+    updateCard()
+
+    task.spawn(function()
+        while BC.Alive do
+            local _, me = BC.GetChar()
+            for p, r in pairs(rows) do
+                if r.dist then
+                    local _, hrp = parts(p)
+                    if hrp and me then
+                        r.dist.Text, r.dist.TextColor3 = math.floor((hrp.Position - me.Position).Magnitude) .. "م", T.Green
+                    elseif BC.LastPos[p] then
+                        r.dist.Text, r.dist.TextColor3 = "بعيد", T.Gold
+                    else
+                        r.dist.Text, r.dist.TextColor3 = "؟", T.SubText
+                    end
+                end
+            end
+            updateCard()
+            task.wait(0.6)
+        end
+    end)
+end
+-- [[ BAY COLLECTIVE v3 - PART 7/9: WORLD, ESP & VISUALS ]] --
+do
+    local S, UI, T, C, State, LP = BC.S, BC.UI, BC.Theme, BC.Config, BC.State, BC.LP
+    local Players, RunService, UIS, Lighting = S.Players, S.Run, S.UIS, S.Light
+    local New = BC.New
+
+    BC.Orig = {
+        Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime, FogEnd = Lighting.FogEnd,
+        GlobalShadows = Lighting.GlobalShadows, Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
+        Gravity = workspace.Gravity, FOV = workspace.CurrentCamera.FieldOfView,
+    }
+    local O = BC.Orig
+
+    local function restoreLight()
+        Lighting.Brightness, Lighting.FogEnd, Lighting.GlobalShadows = O.Brightness, O.FogEnd, O.GlobalShadows
+        Lighting.Ambient, Lighting.OutdoorAmbient = O.Ambient, O.OutdoorAmbient
+        if not C.TimeOn then Lighting.ClockTime = O.ClockTime end
+    end
+    function BC.RestoreWorld()
+        restoreLight()
+        Lighting.ClockTime = O.ClockTime
+        workspace.Gravity = O.Gravity
+        local cam = workspace.CurrentCamera
+        if cam then cam.FieldOfView = O.FOV end
+    end
+    BC.OnCleanup(BC.RestoreWorld)
+
+    -- ===== ESP =====
+    local folder = New("Folder", { Name = "BC_ESP" }, BC.UiParent)
+    BC.OnCleanup(function() folder:Destroy() end)
+    local esp = {}
+    local function clearESP(p)
+        local e = esp[p]
+        if e then
+            e.hl:Destroy()
+            e.bb:Destroy()
+            esp[p] = nil
+        end
+    end
+    local function buildESP(p, ch)
+        local head = ch:FindFirstChild("Head")
+        if not head then return end
+        local col = (p == State.Selected) and T.Gold or T.A1
+        local hl = New("Highlight", {
+            Adornee = ch, FillColor = col, OutlineColor = Color3.new(1, 1, 1), FillTransparency = 0.82,
+            OutlineTransparency = 0.2, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+        }, folder)
+        local bb = New("BillboardGui", {
+            Adornee = head, Size = UDim2.fromOffset(150, 30), StudsOffset = Vector3.new(0, 2.6, 0), AlwaysOnTop = true,
+        }, folder)
+        local lbl = New("TextLabel", {
+            Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = T.Font, TextSize = 12, TextColor3 = col,
+            TextStrokeTransparency = 0.4, Text = p.DisplayName,
+        }, bb)
+        esp[p] = { hl = hl, bb = bb, lbl = lbl, char = ch }
+    end
+
+    task.spawn(function()
+        while BC.Alive do
+            local _, me = BC.GetChar()
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LP then
+                    local ch, e = p.Character, esp[p]
+                    if C.ESP and ch and ch:FindFirstChild("Head") then
+                        if e and (e.char ~= ch or not e.hl.Parent) then clearESP(p) e = nil end
+                        if not e then buildESP(p, ch) e = esp[p] end
+                        if e then
+                            local col = (p == State.Selected) and T.Gold or T.A1
+                            e.hl.FillColor, e.lbl.TextColor3, e.bb.Enabled = col, col, C.ESPNames
+                            local hrp = ch:FindFirstChild("HumanoidRootPart")
+                            e.lbl.Text = p.DisplayName .. ((me and hrp) and (" [" .. math.floor((hrp.Position - me.Position).Magnitude) .. "م]") or "")
+                        end
+                    elseif e then
+                        clearESP(p)
+                    end
+                end
+            end
+            for p in pairs(esp) do if not p.Parent then clearESP(p) end end
+            task.wait(0.3)
+        end
+    end)
+
+    -- ===== فرض القيم =====
+    task.spawn(function()
+        while BC.Alive do
+            if C.FullBright then
+                Lighting.Brightness, Lighting.GlobalShadows, Lighting.FogEnd = 2, false, 1e6
+                Lighting.Ambient, Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180), Color3.fromRGB(180, 180, 180)
+                if not C.TimeOn then Lighting.ClockTime = 14 end
+            end
+            if C.TimeOn then Lighting.ClockTime = C.Time end
+            if C.GravOn then workspace.Gravity = C.Grav end
+            task.wait(0.3)
+        end
+    end)
+    BC.Track(RunService.RenderStepped:Connect(function()
+        if C.FOVOn then
+            local cam = workspace.CurrentCamera
+            if cam and cam.FieldOfView ~= C.FOV then cam.FieldOfView = C.FOV end
+        end
+    end))
+
+    -- ===== انتقال بلمسة =====
+    local function tpTo(pos)
+        local _, hrp = BC.GetChar()
+        if not hrp or State.Anchor then return end
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3.5, 0)) * (hrp.CFrame - hrp.CFrame.Position)
+    end
+    local function castFrom(ray)
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.FilterDescendantsInstances = { LP.Character }
+        local res = workspace:Raycast(ray.Origin, ray.Direction * 2000, rp)
+        if res then tpTo(res.Position) end
+    end
+    BC.Track(UIS.TouchTap:Connect(function(positions, processed)
+        if processed or not C.TapTP then return end
+        local p, cam = positions[1], workspace.CurrentCamera
+        if p and cam then castFrom(cam:ScreenPointToRay(p.X, p.Y)) end
+    end))
+    BC.Track(UIS.InputBegan:Connect(function(input, processed)
+        if processed or not C.TapTP or input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+        if not UIS:IsKeyDown(Enum.KeyCode.LeftControl) then return end
+        local m, cam = UIS:GetMouseLocation(), workspace.CurrentCamera
+        castFrom(cam:ViewportPointToRay(m.X, m.Y))
+    end))
+
+    -- ===== الصفحة =====
+    local world = UI.AddTab("world", "WLD")
+    UI.Section(world, "الرؤية (ESP)")
+    UI.CfgToggle(world, "إظهار اللاعبين من ورا الجدران", "ESP", T.Gold)
+    UI.CfgToggle(world, "إظهار الأسماء والمسافات", "ESPNames", T.A1)
+    UI.Section(world, "الإضاءة والوقت")
+    UI.CfgToggle(world, "إضاءة كاملة (Fullbright)", "FullBright", T.Green, function(v) if not v then restoreLight() end end)
+    UI.CfgToggle(world, "تثبيت الوقت", "TimeOn", T.Violet, function(v) if not v then Lighting.ClockTime = O.ClockTime end end)
+    UI.Slider(world, "الساعة (0 - 24)", "Time", 0, 24, 0.5, nil, T.Violet)
+    UI.Section(world, "الكاميرا والفيزياء")
+    UI.CfgToggle(world, "تغيير زاوية الكاميرا (FOV)", "FOVOn", T.Cyan, function(v)
+        if not v then workspace.CurrentCamera.FieldOfView = O.FOV end
+    end)
+    UI.Slider(world, "قيمة الـ FOV", "FOV", 30, 120, 1, nil, T.Cyan)
+    UI.CfgToggle(world, "تغيير الجاذبية", "GravOn", T.Red, function(v) if not v then workspace.Gravity = O.Gravity end end)
+    UI.Slider(world, "قيمة الجاذبية", "Grav", 10, 400, 1, nil, T.Red)
+    UI.Section(world, "الانتقال")
+    UI.CfgToggle(world, "انتقال بلمسة عالأرض (Tap Teleport)", "TapTP", T.Gold)
+    UI.Label(world, "على الجوال: لمسة وحدة عالمكان. على الكمبيوتر: Ctrl + كليك.")
+end
+-- [[ BAY COLLECTIVE v3 - PART 8/9: TOOLS, SETTINGS & INFO ]] --
+do
+    local S, UI, T, C, State, LP = BC.S, BC.UI, BC.Theme, BC.Config, BC.State, BC.LP
+    local RunService = S.Run
+    local New = BC.New
+
+    -- ===== شريط FPS و Ping =====
+    local Stats = New("TextLabel", {
+        Size = UDim2.fromOffset(120, 22), Position = UDim2.new(1, -130, 0, 8), BackgroundColor3 = T.Panel,
+        BackgroundTransparency = 0.15, Text = "FPS -- | -- ms", Font = T.Font, TextSize = 10, TextColor3 = T.Green,
+        BorderSizePixel = 0, Visible = C.ShowStats,
+    }, BC.Gui)
+    BC.Round(Stats, 4)
+    BC.Stroke(Stats, T.A1, 1, 0.5)
+    local frames = 0
+    BC.Track(RunService.RenderStepped:Connect(function() frames += 1 end))
+    task.spawn(function()
+        while BC.Alive do
+            task.wait(0.5)
+            if Stats.Visible then
+                local fps, ping = frames * 2, 0
+                frames = 0
+                pcall(function() ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()) end)
+                Stats.Text = ("FPS %d | %d ms"):format(fps, ping)
+                Stats.TextColor3 = (fps >= 45) and T.Green or (fps >= 25 and T.Cyan or T.Red)
+            else
+                frames = 0
+            end
+        end
+    end)
+
+    -- ===== دوال =====
+    local function resetAll()
+        BC.ResetConfig()
+        State.Anchor, State.Locked = false, nil
+        BC.RestoreSpeed()
+        BC.RestoreJump()
+        BC.StopFly()
+        BC.StopNoclip()
+        BC.RestoreWorld()
+        Stats.Visible = C.ShowStats
+        UI.ApplyTheme()
+        UI.ApplyScale()
+        BC.RefreshAll()
+        BC.Notify("BAY COLLECTIVE", "رجعنا كل شي للوضع الافتراضي.", T.Red)
+    end
+
+    function BC.ImportJSON(raw)
+        if BC.ApplyJSON(raw) then
+            BC.Save()
+            Stats.Visible = C.ShowStats
+            UI.ApplyTheme()
+            UI.ApplyScale()
+            BC.RefreshAll()
+            BC.Notify("الإعدادات", "انستوردت الإعدادات بنجاح.", T.Green)
+        else
+            BC.Notify("الإعدادات", "النص مو صحيح.", T.Red)
+        end
+    end
+
+    -- ===== الأدوات =====
+    local tools = UI.AddTab("tools", "TLS")
+    UI.Section(tools, "حماية ذكية")
+    UI.CfgToggle(tools, "منع السقوط بالفراغ", "AntiVoid", T.Green)
+    UI.CfgToggle(tools, "منع الطرد لعدم النشاط (Anti-AFK)", "AntiAFK", T.Cyan)
+
+    UI.Section(tools, "نقاط الحفظ (3 خانات)")
+    local saveItems, goItems = {}, {}
+    for i = 1, 3 do
+        saveItems[i] = { "حفظ " .. i, function()
+            local _, hrp = BC.GetChar()
+            if hrp then
+                State.Slots[i] = hrp.CFrame
+                BC.Notify("النقاط", "انحفظت النقطة " .. i, T.Green)
+            end
+        end, T.Cyan }
+        goItems[i] = { "رجوع " .. i, function()
+            local _, hrp = BC.GetChar()
+            if not hrp then return end
+            if not State.Slots[i] then BC.Notify("النقاط", "الخانة " .. i .. " فاضية.", T.Gold) return end
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.CFrame = State.Slots[i]
+            if State.Anchor then State.Locked = State.Slots[i] end
+        end, T.Violet }
+    end
+    UI.ButtonRow(tools, saveItems)
+    UI.ButtonRow(tools, goItems)
+
+    UI.Section(tools, "العرض")
+    UI.CfgToggle(tools, "عرض FPS و Ping", "ShowStats", T.Green, function(v) Stats.Visible = v end)
+
+    UI.Section(tools, "النظام")
+    UI.ButtonRow(tools, {
+        { "إعادة دخول", function()
+            BC.Flush()
+            game:GetService("TeleportService"):Teleport(game.PlaceId, LP)
+        end, T.Gold },
+        { "إعادة ضبط", resetAll, T.Red },
+    })
+    UI.Button(tools, "تسكير وتنظيف كامل", function() BC.Cleanup() end, T.Red)
+
+    -- ===== الإعدادات =====
+    local set = UI.AddTab("settings", "SET")
+    UI.Section(set, "الثيم")
+    local items = {}
+    for i, p in ipairs(BC.Palettes) do
+        items[i] = { p.Name, function()
+            C.Theme = i
+            BC.Save()
+            UI.ApplyTheme()
+        end, p.A }
+    end
+    UI.ButtonRow(set, items)
+    UI.Section(set, "الواجهة")
+    UI.Slider(set, "حجم اللوحة", "UIScale", 0.7, 1.4, 0.05, function() UI.ApplyScale() end, T.Cyan)
+    UI.CfgToggle(set, "تخطي المقدمة بالتشغيل الجاي", "SkipIntro", T.Gold)
+    UI.Section(set, "النسخ الاحتياطي")
+    UI.Label(set, "كل إعداداتك بتنحفظ تلقائياً وبترجع لما تشغّل السكربت.")
+    UI.Button(set, "تصدير الإعدادات (نسخ)", function()
+        local ok, json = pcall(S.Http.JSONEncode, S.Http, C)
+        if ok and setclipboard then
+            setclipboard(json)
+            BC.Notify("الإعدادات", "اننسخت الإعدادات.", T.Green)
+        else
+            BC.Notify("الإعدادات", "الـ executor ما بيدعم النسخ.", T.Red)
+        end
+    end, T.Cyan)
+    UI.Input(set, "الصق إعدادات هون واضغط Enter للاستيراد", function(txt, enter)
+        if enter and txt ~= "" then BC.ImportJSON(txt) end
+    end)
+
+    -- ===== الشرح =====
+    local info = UI.AddTab("info", "INF")
+    UI.Section(info, "شرح الميزات")
+    UI.Label(info, [[
+• الحماية: درع ضد الدفع والفلنق، موازنة ضد السقوط والجلوس الإجباري، وتثبيت صارم بمكانك.
+• الحركة: السرعة والقفز بالقيم يلي بتختارها، طيران، اختراق جدران، وقفز مرن.
+• اللاعبين: قائمة بصور الأفاتار، انتقال لأي لاعب، ومشاهدة بتحاول تحمّل المنطقة حتى لو بعيد.
+• العالم: ESP من ورا الجدران، إضاءة كاملة، تثبيت الوقت، FOV، جاذبية، وانتقال بلمسة.
+• الأدوات: منع السقوط بالفراغ، Anti-AFK، 3 نقاط حفظ، FPS وPing.
+• الإعدادات: 4 ثيمات، حجم اللوحة، تخطي المقدمة، تصدير واستيراد.]])
+    UI.Section(info, "ملاحظات")
+    UI.Label(info, "• الزر العايم BC لفتح وتسكير اللوحة وبتقدر تسحبه.\n• مشاهدة لاعب بعيد: لو اللعبة بتستخدم StreamingEnabled ولاعب ما انشاف أبداً، موقعه مجهول وما بينفع.\n• التثبيت (Anchor) ما بيتحفظ بالتشغيل الجاي.")
+end
+-- [[ BAY COLLECTIVE v3 - PART 9/9: ENGINE & LAUNCH ]] --
+do
+    local S, UI, T, C, State, LP = BC.S, BC.UI, BC.Theme, BC.Config, BC.State, BC.LP
+    local Players, RunService, UIS = S.Players, S.Run, S.UIS
+
+    -- ===== كاش تصادم اللاعبين =====
+    local others = {}
+    local function Watch(plr)
+        if plr == LP then return end
+        local function onChar(ch)
+            local list = {}
+            others[plr] = list
+            for _, p in ipairs(ch:GetDescendants()) do
+                if p:IsA("BasePart") then table.insert(list, p) end
+            end
+            BC.Track(ch.DescendantAdded:Connect(function(d)
+                if d:IsA("BasePart") then table.insert(list, d) end
+            end))
+        end
+        if plr.Character then onChar(plr.Character) end
+        BC.Track(plr.CharacterAdded:Connect(onChar))
+    end
+    for _, p in ipairs(Players:GetPlayers()) do Watch(p) end
+    BC.Track(Players.PlayerAdded:Connect(Watch))
+    BC.Track(Players.PlayerRemoving:Connect(function(p) others[p] = nil end))
+
+    BC.Track(RunService.Stepped:Connect(function()
+        if not BC.Ready then return end
+        if C.Noclip and LP.Character then
+            for _, p in ipairs(LP.Character:GetChildren()) do
+                if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
+            end
+        end
+        if C.Shield or State.Anchor then
+            for _, list in pairs(others) do
+                for i = #list, 1, -1 do
+                    local p = list[i]
+                    if not p.Parent then table.remove(list, i)
+                    elseif p.CanCollide then p.CanCollide = false end
+                end
+            end
+        end
+    end))
+
+    -- ===== تنظيف القوى (بدون ما نلمس المقاعد والمركبات) =====
+    local function ClearForces(hrp, hum)
+        if hum.SeatPart then return end
+        for _, o in ipairs(hrp:GetChildren()) do
+            if o:IsA("BodyAngularVelocity") or o:IsA("BodyVelocity") or o:IsA("BodyThrust") or o:IsA("BodyGyro")
+                or o:IsA("BodyPosition") or o:IsA("AngularVelocity") or o:IsA("LinearVelocity") or o:IsA("VectorForce")
+                or o:IsA("AlignPosition") or o:IsA("AlignOrientation") then
+                o:Destroy()
+            end
+        end
+    end
+
+    -- ===== الحلقة الرئيسية =====
+    local lastHum, lastSafe, warned = nil, 0, false
+
+    local function Step()
+        if not BC.Ready then return end
+        local _, hrp, hum = BC.GetChar()
+        if not (hrp and hum) or hum.Health <= 0 then return end
+
+        if hum ~= lastHum then
+            lastHum = hum
+            BC.Base.Walk, BC.Base.JumpPower, BC.Base.JumpHeight = hum.WalkSpeed, hum.JumpPower, hum.JumpHeight
+        end
+
+        if C.Shield then
+            ClearForces(hrp, hum)
+            local v = hrp.AssemblyLinearVelocity
+            if v.Magnitude > 80 and not C.Fly then
+                local xz = Vector3.new(v.X, 0, v.Z)
+                if xz.Magnitude > 65 then xz = xz.Unit * 65 end
+                hrp.AssemblyLinearVelocity = Vector3.new(xz.X, math.clamp(v.Y, -95, 65), xz.Z)
+            end
+            if hrp.AssemblyAngularVelocity.Magnitude > 18 then hrp.AssemblyAngularVelocity = Vector3.zero end
+        end
+
+        if C.Guard then
+            if hum.Sit then hum.Sit = false end
+            if hum.PlatformStand then hum.PlatformStand = false end
+            if hum.WalkSpeed <= 1 then hum.WalkSpeed = C.SpeedOn and C.Speed or (BC.Base.Walk or 16) end
+            local st = hum:GetState()
+            if st == Enum.HumanoidStateType.FallingDown or st == Enum.HumanoidStateType.Ragdoll or st == Enum.HumanoidStateType.Seated then
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end
+
+        if C.AntiVoid and not State.Anchor then
+            local fh = workspace.FallenPartsDestroyHeight
+            if fh == fh and fh > -1e5 and hrp.Position.Y < fh + 80 then
+                local dest = State.SafePos or (BC.State.Slots and State.Slots[1])
+                if dest then
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.CFrame = dest
+                end
+            elseif hum.FloorMaterial ~= Enum.Material.Air and os.clock() - lastSafe > 0.5 then
+                lastSafe = os.clock()
+                State.SafePos = hrp.CFrame + Vector3.new(0, 3, 0)
+            end
+        end
+
+        if State.Anchor and State.Locked then
+            ClearForces(hrp, hum)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            hrp.CFrame = State.Locked
+            return
+        end
+
+        if C.Fly then
+            local cam = workspace.CurrentCamera
+            local cf = cam.CFrame
+            local md = hum.MoveDirection
+            local dir = Vector3.zero
+            if md.Magnitude > 0.05 then
+                local look = cf.LookVector
+                local flat = Vector3.new(look.X, 0, look.Z)
+                flat = flat.Magnitude > 0.01 and flat.Unit or Vector3.new(0, 0, -1)
+                local right = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z).Unit
+                dir = look * md:Dot(flat) + right * md:Dot(right)
+            end
+            if hum.Jump or UIS:IsKeyDown(Enum.KeyCode.Space) then dir += Vector3.new(0, 1, 0) end
+            if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.LeftControl) then dir -= Vector3.new(0, 1, 0) end
+            if dir.Magnitude > 1 then dir = dir.Unit end
+            hrp.AssemblyLinearVelocity = dir * C.FlySpeed
+        end
+
+        if C.SpeedOn and hum.WalkSpeed ~= C.Speed then hum.WalkSpeed = C.Speed end
+        if C.JumpOn then
+            if hum.UseJumpPower then
+                if hum.JumpPower ~= C.Jump then hum.JumpPower = C.Jump end
+            else
+                hum.JumpHeight = (C.Jump * C.Jump) / (2 * workspace.Gravity)
+            end
+        end
+    end
+
+    BC.Track(RunService.Heartbeat:Connect(function()
+        local ok, err = pcall(Step)
+        if not ok and not warned then
+            warned = true
+            warn("[BayCollective] " .. tostring(err))
+        end
+    end))
+
+    BC.Track(UIS.JumpRequest:Connect(function()
+        if BC.Ready and C.InfJump and not State.Anchor then
+            local _, _, hum = BC.GetChar()
+            if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end
+    end))
+
+    BC.Track(LP.Idled:Connect(function()
+        if not C.AntiAFK then return end
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            vu:CaptureController()
+            vu:ClickButton2(Vector2.new())
+        end)
+    end))
+
+    BC.Track(LP.CharacterAdded:Connect(function()
+        State.Anchor, State.Locked, State.SafePos = false, nil, nil
+        lastHum = nil
+        BC.RefreshAll()
+    end))
+
+    BC.OnCleanup(function()
+        BC.StopNoclip()
+        BC.StopFly()
+        BC.RestoreSpeed()
+        BC.RestoreJump()
+    end)
+
+    -- ===== التشغيل =====
+    local function launched()
+        BC.Ready = true
+        UI.Float.Visible = true
+        UI.Open(true)
+        local n = 0
+        for _, k in ipairs({ "SpeedOn", "JumpOn", "InfJump", "Shield", "Guard", "Noclip", "Fly", "TapTP",
+            "ESP", "FullBright", "FOVOn", "GravOn", "TimeOn" }) do
+            if C[k] then n += 1 end
+        end
+        if BC.LoadedFromSave and n > 0 then
+            BC.Notify("BAY COLLECTIVE", "رجّعنا إعداداتك: " .. n .. " ميزة شغّالة.", T.Green)
+        else
+            BC.Notify("BAY COLLECTIVE", "جاهز.. يلا جرّب.", T.A1)
+        end
+    end
+
+    UI.Float.Visible = false
+    if C.SkipIntro then
+        launched()
+    else
+        BC.PlayIntro(launched)
+    end
+end
